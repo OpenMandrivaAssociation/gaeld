@@ -1,0 +1,38 @@
+Gäld is installed under /srv/www/gaeld. The document root is
+/srv/www/gaeld/public. Configuration is /etc/gaeld/gaeld.env
+(symlinked to /srv/www/gaeld/.env).
+
+1. Create the database (PostgreSQL) and a Redis instance:
+
+   su - postgres -c "createuser -P gaeld"
+   su - postgres -c "createdb -O gaeld gaeld"
+   systemctl enable --now postgresql redis
+
+2. Edit /etc/gaeld/gaeld.env. Set DB_PASSWORD, APP_URL, and the
+   hostname used in WEBAUTHN_ID. APP_URL must be the URL users open
+   in the browser, including https:// when TLS is terminated in front.
+
+3. Enable a web server integration and the queue:
+
+   # nginx (packaged site: /etc/nginx/sites-available/gaeld.conf)
+   ln -s ../sites-available/gaeld.conf /etc/nginx/sites-enabled/gaeld.conf
+   systemctl enable --now php-fpm@gaeld nginx
+
+   # or Apache: the snippet in
+   # /etc/httpd/conf/webapps.d/gaeld.conf expects a vhost whose
+   # DocumentRoot is /srv/www/gaeld/public and mod_proxy_fcgi.
+   systemctl enable --now php-fpm@gaeld httpd
+
+   systemctl enable --now gaeld-horizon.service gaeld-scheduler.timer
+
+4. Install the application (creates the admin user and the Swiss
+   chart of accounts):
+
+   gaeld gaeld:install
+
+   On later package upgrades the rpm runs gaeld:update when APP_KEY
+   is already set.
+
+Receipt OCR needs tesseract and the deu, fra, and eng language packs.
+Search stays on the database driver. Meilisearch is optional; see
+SCOUT_DRIVER in the environment file.
