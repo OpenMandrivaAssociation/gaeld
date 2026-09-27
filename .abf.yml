@@ -1,4 +1,5 @@
 sources:
   gaeld-3.8.25.tar.gz: d5f2bea23d148bd9ee0ecf4ad354506383f729cb
   gaeld-3.8.25-vendor.tar.xz: 1c9324903efdfb6d9e2f3eeebcd8b623bb3058d1
-  gaeld-3.8.25-assets.tar.xz: 8322097fa626fd223889b8d8209304ce96d894c5
+  gaeld-foreign-currency.patch: b41a65bcdb154dbc60542256002351ac18c2bdf5
+  gaeld-3.8.25-assets.tar.xz: 3ff25cadeb3979138a07ee7d47bd8518bd496d1d
