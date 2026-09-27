@@ -4,3 +4,4 @@ sources:
   gaeld-foreign-currency.patch: b41a65bcdb154dbc60542256002351ac18c2bdf5
   gaeld-3.8.25-assets.tar.xz: 3ff25cadeb3979138a07ee7d47bd8518bd496d1d
   gaeld-export-import-and-fab.patch: 8176d3f80d683863693125dc63cfef4f63d19720
+  gaeld-expense-asset-account.patch: 916d2ea9a4e5484636e7b41da8be00ac3df0e433

@@ -1,0 +1,184 @@
+--- a/app/Domains/Accounting/Queries/AccountQuery.php	2026-09-23 10:17:38.000000000 +0200
++++ b/app/Domains/Accounting/Queries/AccountQuery.php	2026-09-27 22:55:53.426530619 +0200
+@@ -30,6 +30,27 @@
+     }
+ 
+     /**
++     * Expense accounts plus asset accounts, so a purchase can be booked to
++     * the balance sheet (for example IT equipment) and still carry a receipt.
++     *
++     * @return Collection<int, Account>
++     */
++    public static function expenseOrAssetForSelect(): Collection
++    {
++        $orgId = app(CurrentOrganization::class)->id();
++
++        return Cache::tags(["org:{$orgId}:ledger"])->remember(
++            "accounts_select_expense_asset:{$orgId}",
++            600,
++            fn () => Account::where('organization_id', $orgId)
++                ->where('is_active', true)
++                ->whereIn('type', [AccountType::Expense->value, AccountType::Asset->value])
++                ->orderBy('code')
++                ->get(['id', 'code', 'name', 'type'])
++        );
++    }
++
++    /**
+      * Asset accounts limited to the cash/bank class (Swiss KMU codes 1000-1099).
+      *
+      * Used when picking a ledger account for a bank account so the dropdown
+--- a/app/Domains/Expenses/Controllers/ExpenseController.php	2026-09-23 10:17:38.000000000 +0200
++++ b/app/Domains/Expenses/Controllers/ExpenseController.php	2026-09-27 22:55:45.114434423 +0200
+@@ -90,7 +90,7 @@
+             'vatRates' => VatRateQuery::active(),
+             'suppliers' => $selfService ? [] : ContactQuery::forSelect(),
+             'categories' => ExpenseCategoryQuery::forSelect(),
+-            'expenseAccounts' => $selfService ? [] : AccountQuery::forSelect(AccountType::Expense),
++            'expenseAccounts' => $selfService ? [] : AccountQuery::expenseOrAssetForSelect(),
+             'bankAccounts' => $selfService ? [] : BankAccountQuery::forSelect(),
+             'ocrData' => $ocrData,
+             'selfService' => $selfService,
+@@ -197,7 +197,7 @@
+             'vatRates' => VatRateQuery::active(),
+             'suppliers' => ContactQuery::forSelect(),
+             'categories' => ExpenseCategoryQuery::forSelect(),
+-            'expenseAccounts' => AccountQuery::forSelect(AccountType::Expense),
++            'expenseAccounts' => AccountQuery::expenseOrAssetForSelect(),
+             'bankAccounts' => BankAccountQuery::forSelect(),
+             'receiptUrl' => $expense->receipt_path ? route('expenses.receipt.download', $expense) : null,
+         ]);
+--- a/app/Domains/Expenses/Controllers/RecurringExpenseController.php	2026-09-23 10:17:38.000000000 +0200
++++ b/app/Domains/Expenses/Controllers/RecurringExpenseController.php	2026-09-27 22:55:45.106434331 +0200
+@@ -47,7 +47,7 @@
+         return Inertia::render('Expenses/Recurring/Create', [
+             'suppliers' => ContactQuery::forSelect(),
+             'categories' => ExpenseCategoryQuery::forSelect(),
+-            'expenseAccounts' => AccountQuery::forSelect(AccountType::Expense),
++            'expenseAccounts' => AccountQuery::expenseOrAssetForSelect(),
+             'vatRates' => VatRateQuery::active(),
+             'frequencies' => $this->frequencyOptions(),
+         ]);
+@@ -111,7 +111,7 @@
+             'recurringExpense' => $recurring->load('supplier:id,name'),
+             'suppliers' => ContactQuery::forSelect(),
+             'categories' => ExpenseCategoryQuery::forSelect(),
+-            'expenseAccounts' => AccountQuery::forSelect(AccountType::Expense),
++            'expenseAccounts' => AccountQuery::expenseOrAssetForSelect(),
+             'vatRates' => VatRateQuery::active(),
+             'frequencies' => $this->frequencyOptions(),
+         ]);
+--- a/app/Domains/Expenses/Requests/Concerns/ExpenseValidationRules.php	2026-09-23 10:17:38.000000000 +0200
++++ b/app/Domains/Expenses/Requests/Concerns/ExpenseValidationRules.php	2026-09-27 22:55:45.106434331 +0200
+@@ -37,7 +37,10 @@
+                     'string',
+                     Rule::exists('accounts', 'code')
+                         ->where('organization_id', $orgId)
+-                        ->where('type', AccountType::Expense->value),
++                        ->where(fn ($query) => $query->whereIn('type', [
++                            AccountType::Expense->value,
++                            AccountType::Asset->value,
++                        ])),
+                 ],
+                 'bank_account_code' => [
+                     $selfService ? 'prohibited' : 'nullable',
+--- a/app/Domains/Expenses/Requests/RecurringExpenseRequest.php	2026-09-23 10:17:38.000000000 +0200
++++ b/app/Domains/Expenses/Requests/RecurringExpenseRequest.php	2026-09-27 22:56:29.638949554 +0200
+@@ -48,8 +48,11 @@
+                 'integer',
+                 Rule::exists('accounts', 'id')
+                     ->where('organization_id', $orgId)
+-                    ->where('type', AccountType::Expense->value)
+-                    ->where('is_active', true),
++                    ->where('is_active', true)
++                    ->where(fn ($query) => $query->whereIn('type', [
++                        AccountType::Expense->value,
++                        AccountType::Asset->value,
++                    ])),
+             ],
+             'vat_amount' => ['nullable', 'numeric', 'min:0'],
+             'vendor' => ['nullable', 'string', 'max:255'],
+@@ -72,8 +75,11 @@
+                 'string',
+                 Rule::exists('accounts', 'code')
+                     ->where('organization_id', $orgId)
+-                    ->where('type', AccountType::Expense->value)
+-                    ->where('is_active', true),
++                    ->where('is_active', true)
++                    ->where(fn ($query) => $query->whereIn('type', [
++                        AccountType::Expense->value,
++                        AccountType::Asset->value,
++                    ])),
+             ],
+             'bank_account_code' => [
+                 'nullable',
+--- a/app/Domains/Expenses/Validation/ExpenseSharedValidationRules.php	2026-09-23 10:17:38.000000000 +0200
++++ b/app/Domains/Expenses/Validation/ExpenseSharedValidationRules.php	2026-09-27 22:55:45.126434563 +0200
+@@ -13,8 +13,11 @@
+     {
+         $categoryRule = Rule::exists('expense_categories', 'id');
+         $accountRule = Rule::exists('accounts', 'id')
+-            ->where('type', AccountType::Expense->value)
+-            ->where('is_active', true);
++            ->where('is_active', true)
++            ->where(fn ($query) => $query->whereIn('type', [
++                AccountType::Expense->value,
++                AccountType::Asset->value,
++            ]));
+ 
+         if ($organizationId !== null) {
+             $categoryRule->where('organization_id', $organizationId);
+@@ -48,8 +51,11 @@
+     {
+         $categoryRule = Rule::exists('expense_categories', 'id');
+         $accountRule = Rule::exists('accounts', 'id')
+-            ->where('type', AccountType::Expense->value)
+-            ->where('is_active', true);
++            ->where('is_active', true)
++            ->where(fn ($query) => $query->whereIn('type', [
++                AccountType::Expense->value,
++                AccountType::Asset->value,
++            ]));
+ 
+         if ($organizationId !== null) {
+             $categoryRule->where('organization_id', $organizationId);
+--- a/app/Domains/Expenses/Services/ExpenseAccountResolver.php	2026-09-23 10:17:38.000000000 +0200
++++ b/app/Domains/Expenses/Services/ExpenseAccountResolver.php	2026-09-27 22:55:45.106434331 +0200
+@@ -16,7 +16,7 @@
+     ): ?Account {
+         $query = Account::withoutGlobalScopes()
+             ->where('organization_id', $organizationId)
+-            ->where('type', AccountType::Expense)
++            ->whereIn('type', [AccountType::Expense->value, AccountType::Asset->value])
+             ->where('is_active', true);
+ 
+         if ($accountId !== null) {
+--- a/app/Domains/Api/Requests/PostExpenseToLedgerRequest.php	2026-09-23 10:17:38.000000000 +0200
++++ b/app/Domains/Api/Requests/PostExpenseToLedgerRequest.php	2026-09-27 22:55:45.106434331 +0200
+@@ -78,7 +78,11 @@
+             $validator->errors()->add($field, __('app.account_must_be_active'));
+         }
+ 
+-        if ($requiredType !== null && $account->type !== $requiredType) {
++        $allowed = $requiredType === AccountType::Expense
++            ? [AccountType::Expense, AccountType::Asset]
++            : ($requiredType !== null ? [$requiredType] : []);
++
++        if ($allowed !== [] && ! in_array($account->type, $allowed, true)) {
+             $validator->errors()->add($field, __('app.expense_account_must_be_expense'));
+         }
+     }
+--- a/app/Domains/Banking/Requests/ReconcileExpenseRequest.php	2026-09-23 10:17:38.000000000 +0200
++++ b/app/Domains/Banking/Requests/ReconcileExpenseRequest.php	2026-09-27 22:55:45.106434331 +0200
+@@ -36,7 +36,10 @@
+                 'max:10',
+                 Rule::exists('accounts', 'code')
+                     ->where('organization_id', $bankAccount->organization_id)
+-                    ->where('type', AccountType::Expense->value)
++                    ->where(fn ($query) => $query->whereIn('type', [
++                        AccountType::Expense->value,
++                        AccountType::Asset->value,
++                    ]))
+                     ->where('is_active', true),
+             ],
+         ];
