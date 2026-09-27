@@ -47,6 +47,7 @@ Requires(post):	%{_bindir}/runuser
 
 %patchlist
 gaeld-foreign-currency.patch
+gaeld-export-import-and-fab.patch
 
 %description
 Gäld is a self-hosted double-entry accounting application for small

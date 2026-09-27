@@ -1,0 +1,148 @@
+--- a/app/Domains/Migration/Parsers/GenericCsvParser.php	2026-09-23 10:17:38.000000000 +0200
++++ b/app/Domains/Migration/Parsers/GenericCsvParser.php	2026-09-27 21:00:33.944467123 +0200
+@@ -72,13 +72,15 @@
+ 
+     public function parse(UploadedFile $file, DataType $dataType): Collection
+     {
+-        $content = $file->get();
++        $content = ltrim($file->get(), "\xEF\xBB\xBF");
+         $lines = explode("\n", str_replace("\r\n", "\n", $content));
+ 
+         if (count($lines) < 2) {
+             return collect();
+         }
+ 
++        $this->applyHeaderMapping($lines[0], $dataType);
++
+         // Skip header row
+         array_shift($lines);
+ 
+@@ -123,6 +125,55 @@
+     }
+ 
+     /**
++     * Gäld's own organisation export is a semicolon CSV with a header row.
++     * The migration screen does not send a column map, so recognise that file.
++     */
++    private function applyHeaderMapping(string $headerLine, DataType $dataType): void
++    {
++        if ($this->columnMapping !== []) {
++            return;
++        }
++
++        $headerLine = ltrim($headerLine, "\xEF\xBB\xBF");
++        if (substr_count($headerLine, ';') > substr_count($headerLine, ',')) {
++            $this->delimiter = ';';
++        }
++
++        $headers = str_getcsv(trim($headerLine), $this->delimiter);
++        $aliases = match ($dataType) {
++            DataType::Expenses => [
++                'date' => ['date'],
++                'amount' => ['amount'],
++                'vat_amount' => ['vat amount'],
++                'description' => ['description'],
++                'category' => ['category'],
++                'supplier_name' => ['vendor', 'supplier'],
++                'currency' => ['currency'],
++                'status' => ['status'],
++            ],
++            default => [],
++        };
++
++        if ($aliases === []) {
++            return;
++        }
++
++        $normalized = [];
++        foreach ($headers as $index => $header) {
++            $normalized[$index] = strtolower(trim((string) $header));
++        }
++
++        foreach ($aliases as $field => $names) {
++            foreach ($normalized as $index => $header) {
++                if (in_array($header, $names, true)) {
++                    $this->columnMapping[$field] = $index;
++                    break;
++                }
++            }
++        }
++    }
++
++    /**
+      * @param  array<int, string|null>  $values
+      * @return array<string, string|null>
+      */
+@@ -171,12 +222,15 @@
+             ),
+             DataType::Expenses => new ExpenseImportRow(
+                 sourceRow: $sourceRow,
+-                date: $data['date'] ?? '',
++                date: isset($data['date']) ? substr((string) $data['date'], 0, 10) : '',
+                 amount: $data['amount'] ?? '0',
++                currency: $data['currency'] ?? 'CHF',
+                 description: $data['description'] ?? null,
+                 category: $data['category'] ?? null,
+                 supplierName: $data['supplier_name'] ?? null,
+                 accountCode: $data['account_code'] ?? null,
++                vatAmount: $data['vat_amount'] ?? null,
++                status: $data['status'] ?? null,
+             ),
+             DataType::JournalEntries => new JournalEntryImportRow(
+                 sourceRow: $sourceRow,
+--- a/app/Domains/Migration/Importers/ExpenseImporter.php	2026-09-23 10:17:38.000000000 +0200
++++ b/app/Domains/Migration/Importers/ExpenseImporter.php	2026-09-27 21:01:43.793693526 +0200
+@@ -3,6 +3,7 @@
+ namespace App\Domains\Migration\Importers;
+ 
+ use App\Domains\Contacts\Models\Contact;
++use App\Domains\Expenses\Enums\ExpenseStatus;
+ use App\Domains\Expenses\Models\Expense;
+ use App\Domains\Migration\Contracts\DataTypeImporterInterface;
+ use App\Domains\Migration\DTOs\ExpenseImportRow;
+@@ -84,16 +85,19 @@
+                         }
+                     }
+ 
++                    $status = ExpenseStatus::tryFrom((string) $row->status) ?? ExpenseStatus::Pending;
++
+                     Expense::create([
+                         'organization_id' => $organization->id,
+                         'supplier_id' => $supplier?->id,
+                         'date' => $row->date,
+                         'amount' => $row->amount,
+-                        'currency' => $row->currency,
++                        'vat_amount' => $row->vatAmount ?? '0',
++                        'currency' => $row->currency !== '' ? $row->currency : 'CHF',
+                         'description' => $row->description,
+-                        'category' => $row->category,
+-                        'reference' => $row->reference,
+-                        'is_paid' => $row->isPaid,
++                        'category' => $row->category ?? '',
++                        'vendor' => $row->supplierName,
++                        'status' => $status,
+                     ]);
+ 
+                     $imported++;
+--- a/app/Domains/Migration/DTOs/ExpenseImportRow.php	2026-09-23 10:17:38.000000000 +0200
++++ b/app/Domains/Migration/DTOs/ExpenseImportRow.php	2026-09-27 21:00:33.791193650 +0200
+@@ -17,6 +17,8 @@
+         public readonly ?float $vatRate = null,
+         public readonly ?string $reference = null,
+         public readonly bool $isPaid = true,
++        public readonly ?string $vatAmount = null,
++        public readonly ?string $status = null,
+     ) {
+         parent::__construct($sourceRow);
+     }
+--- a/resources/js/Components/QuickReceiptButton.vue	2026-09-23 10:17:38.000000000 +0200
++++ b/resources/js/Components/QuickReceiptButton.vue	2026-09-27 22:25:59.680401672 +0200
+@@ -25,7 +25,7 @@
+     <button
+       :title="limitReached ? t(usesMonthlyLimit ? 'ocr_monthly_limit_reached' : 'ocr_daily_limit_reached', { limit: displayedLimit }) : t('quick_receipt')"
+       :disabled="limitReached"
+-      class="fixed bottom-6 right-6 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-[hsl(var(--primary))] text-white shadow-lg transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))] focus-visible:ring-offset-2 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100"
++      class="fixed bottom-6 left-6 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-[hsl(var(--primary))] text-white shadow-lg transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))] focus-visible:ring-offset-2 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100"
+       @click="!limitReached && (showModal = true)"
+     >
+       <Camera class="h-6 w-6" />
