@@ -1,7 +1,7 @@
 Summary:	Swiss double-entry accounting, invoicing, and VAT
 Name:		gaeld
 Version:	3.8.25
-Release:	3
+Release:	4
 License:	AGPL-3.0-or-later
 Group:		System/Servers
 URL:		https://gaeld.ch/
