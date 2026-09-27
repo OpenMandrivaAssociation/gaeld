@@ -1,7 +1,7 @@
 Summary:	Swiss double-entry accounting, invoicing, and VAT
 Name:		gaeld
 Version:	3.8.25
-Release:	1
+Release:	2
 License:	AGPL-3.0-or-later
 Group:		System/Servers
 URL:		https://gaeld.ch/
@@ -40,8 +40,8 @@ Requires:	php-xmlwriter
 Requires:	php-zip
 Requires:	php-fpm
 Requires:	gaeld-webserver-integration = %{EVRD}
+Requires:	redis
 Recommends:	postgresql
-Recommends:	redis
 Recommends:	tesseract
 Requires(post):	%{_bindir}/runuser
 
@@ -51,8 +51,9 @@ Swiss businesses. It covers the journal and ledger, Swiss QR-bill
 invoicing, VAT, expenses, and CAMT bank reconciliation.
 
 This package is the AGPL-3.0-or-later Community Edition. PostgreSQL
-and Redis are expected on the local host. See README.install.omv
-after installation.
+is expected on the local host. Cache, sessions, and queues use a
+private Redis instance, redis@gaeld, on a Unix socket. See
+README.install.omv after installation.
 
 %package nginx
 Summary:	nginx and php-fpm integration for Gäld
@@ -219,12 +220,41 @@ cat > %{buildroot}%{_sysconfdir}/httpd/conf/webapps.d/gaeld.conf << 'EOF'
 </Directory>
 EOF
 
+install -d %{buildroot}%{_sysconfdir}/redis
+cat > %{buildroot}%{_sysconfdir}/redis/gaeld.conf << 'EOF'
+# redis@gaeld — private instance for Gäld (cache, sessions, queues)
+bind 127.0.0.1 -::1
+protected-mode yes
+port 0
+unixsocket /run/redis/gaeld/redis.sock
+unixsocketperm 666
+pidfile /run/redis/gaeld.pid
+dir /srv/redis/gaeld
+dbfilename dump.rdb
+logfile ""
+loglevel notice
+daemonize no
+supervised systemd
+timeout 0
+tcp-keepalive 300
+EOF
+
+install -d %{buildroot}%{_unitdir}/php-fpm@gaeld.service.d
+cat > %{buildroot}%{_unitdir}/php-fpm@gaeld.service.d/redis.conf << 'EOF'
+[Unit]
+Wants=redis@gaeld.service
+After=redis@gaeld.service
+EOF
+
+install -d %{buildroot}%{_unitdir}/multi-user.target.wants
+ln -s ../redis@.service %{buildroot}%{_unitdir}/multi-user.target.wants/redis@gaeld.service
+
 install -d %{buildroot}%{_unitdir}
 cat > %{buildroot}%{_unitdir}/gaeld-horizon.service << 'EOF'
 [Unit]
 Description=Gäld queue worker (Laravel Horizon)
-After=network.target redis.service postgresql.service php-fpm@gaeld.service
-Wants=redis.service
+After=network.target redis@gaeld.service postgresql.service php-fpm@gaeld.service
+Wants=redis@gaeld.service
 
 [Service]
 User=www
@@ -241,7 +271,8 @@ EOF
 cat > %{buildroot}%{_unitdir}/gaeld-scheduler.service << 'EOF'
 [Unit]
 Description=Gäld scheduler run
-After=network.target redis.service postgresql.service
+After=network.target redis@gaeld.service postgresql.service
+Wants=redis@gaeld.service
 
 [Service]
 Type=oneshot
@@ -281,10 +312,20 @@ chmod -R u+rwX,g+rwX /srv/www/gaeld/storage /srv/www/gaeld/bootstrap/cache
 if [ "$1" -ge 2 ] && grep -q '^APP_KEY=base64:' /etc/gaeld/gaeld.env 2>/dev/null; then
 	runuser -u www -- /usr/bin/php /srv/www/gaeld/artisan gaeld:update --no-interaction || :
 fi
+# Stock 3.8.25-1 env pointed at TCP redis.service, which is not shipped.
+if grep -q '^REDIS_HOST=127.0.0.1$' /etc/gaeld/gaeld.env 2>/dev/null \
+	&& grep -q '^REDIS_PORT=6379$' /etc/gaeld/gaeld.env 2>/dev/null; then
+	sed -i \
+		-e 's|^REDIS_HOST=127.0.0.1$|REDIS_HOST=/run/redis/gaeld/redis.sock|' \
+		-e 's|^REDIS_PORT=6379$|REDIS_PORT=0|' \
+		/etc/gaeld/gaeld.env
+fi
+systemctl start redis@gaeld.service >/dev/null 2>&1 || :
 
 %preun
 if [ "$1" = 0 ]; then
 	systemctl disable --now gaeld-horizon.service gaeld-scheduler.timer php-fpm@gaeld >/dev/null 2>&1 || :
+	systemctl stop redis@gaeld.service >/dev/null 2>&1 || :
 fi
 
 %files
@@ -293,6 +334,9 @@ fi
 %{_unitdir}/gaeld-horizon.service
 %{_unitdir}/gaeld-scheduler.service
 %{_unitdir}/gaeld-scheduler.timer
+%{_unitdir}/php-fpm@gaeld.service.d
+%{_unitdir}/multi-user.target.wants/redis@gaeld.service
+%config(noreplace) %attr(0640,root,redis) %{_sysconfdir}/redis/gaeld.conf
 %dir %attr(0750,root,www) %{_sysconfdir}/%{name}
 %attr(0640,root,www) %config(noreplace) %{_sysconfdir}/%{name}/gaeld.env
 %dir %attr(0750,www,www) /var/lib/%{name}
