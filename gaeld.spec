@@ -13,10 +13,6 @@ Source1:	gaeld-%{version}-vendor.tar.xz
 Source2:	gaeld-%{version}-assets.tar.xz
 Source3:	gaeld.env
 Source4:	README.install.omv
-
-%patchlist
-gaeld-foreign-currency.patch
-
 BuildArch:	noarch
 Requires:	php-cli
 Requires:	php-bcmath
@@ -48,6 +44,9 @@ Requires:	redis
 Recommends:	postgresql
 Recommends:	tesseract
 Requires(post):	%{_bindir}/runuser
+
+%patchlist
+gaeld-foreign-currency.patch
 
 %description
 Gäld is a self-hosted double-entry accounting application for small
