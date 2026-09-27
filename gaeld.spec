@@ -1,7 +1,7 @@
 Summary:	Swiss double-entry accounting, invoicing, and VAT
 Name:		gaeld
 Version:	3.8.25
-Release:	2
+Release:	3
 License:	AGPL-3.0-or-later
 Group:		System/Servers
 URL:		https://gaeld.ch/
@@ -123,9 +123,9 @@ install -d %{buildroot}/srv/www/%{name}/storage/logs
 install -d %{buildroot}/srv/www/%{name}/bootstrap/cache
 install -d %{buildroot}/var/lib/%{name}/backups
 
-install -d %{buildroot}%{_sysconfdir}/%{name}
-install -m 0640 %{SOURCE3} %{buildroot}%{_sysconfdir}/%{name}/gaeld.env
-ln -s %{_sysconfdir}/%{name}/gaeld.env %{buildroot}/srv/www/%{name}/.env
+install -d %{buildroot}%{_sysconfdir}/sysconfig
+install -m 0640 %{SOURCE3} %{buildroot}%{_sysconfdir}/sysconfig/gaeld
+ln -s %{_sysconfdir}/sysconfig/gaeld %{buildroot}/srv/www/%{name}/.env
 
 install -d %{buildroot}%{_bindir}
 cat > %{buildroot}%{_bindir}/gaeld << 'EOF'
@@ -309,16 +309,28 @@ rm -rf %{buildroot}/srv/www/%{name}/.github \
 %post
 chown -R www:www /srv/www/gaeld/storage /srv/www/gaeld/bootstrap/cache /var/lib/gaeld
 chmod -R u+rwX,g+rwX /srv/www/gaeld/storage /srv/www/gaeld/bootstrap/cache
-if [ "$1" -ge 2 ] && grep -q '^APP_KEY=base64:' /etc/gaeld/gaeld.env 2>/dev/null; then
-	runuser -u www -- /usr/bin/php /srv/www/gaeld/artisan gaeld:update --no-interaction || :
+# 3.8.25-1 and -2 kept this file under /etc/gaeld. RPM renames a removed
+# %config to .rpmsave before %post.
+if [ -f /etc/gaeld/gaeld.env.rpmsave ]; then
+	mv -f /etc/gaeld/gaeld.env.rpmsave /etc/sysconfig/gaeld
+elif [ -f /etc/gaeld/gaeld.env ]; then
+	mv -f /etc/gaeld/gaeld.env /etc/sysconfig/gaeld
+fi
+rmdir /etc/gaeld 2>/dev/null || :
+if [ -f /etc/sysconfig/gaeld ]; then
+	chown root:www /etc/sysconfig/gaeld
+	chmod 0640 /etc/sysconfig/gaeld
 fi
 # Stock 3.8.25-1 env pointed at TCP redis.service, which is not shipped.
-if grep -q '^REDIS_HOST=127.0.0.1$' /etc/gaeld/gaeld.env 2>/dev/null \
-	&& grep -q '^REDIS_PORT=6379$' /etc/gaeld/gaeld.env 2>/dev/null; then
+if grep -q '^REDIS_HOST=127.0.0.1$' /etc/sysconfig/gaeld 2>/dev/null \
+	&& grep -q '^REDIS_PORT=6379$' /etc/sysconfig/gaeld 2>/dev/null; then
 	sed -i \
 		-e 's|^REDIS_HOST=127.0.0.1$|REDIS_HOST=/run/redis/gaeld/redis.sock|' \
 		-e 's|^REDIS_PORT=6379$|REDIS_PORT=0|' \
-		/etc/gaeld/gaeld.env
+		/etc/sysconfig/gaeld
+fi
+if [ "$1" -ge 2 ] && grep -q '^APP_KEY=base64:' /etc/sysconfig/gaeld 2>/dev/null; then
+	runuser -u www -- /usr/bin/php /srv/www/gaeld/artisan gaeld:update --no-interaction || :
 fi
 systemctl start redis@gaeld.service >/dev/null 2>&1 || :
 
@@ -337,8 +349,7 @@ fi
 %{_unitdir}/php-fpm@gaeld.service.d
 %{_unitdir}/multi-user.target.wants/redis@gaeld.service
 %config(noreplace) %attr(0640,root,redis) %{_sysconfdir}/redis/gaeld.conf
-%dir %attr(0750,root,www) %{_sysconfdir}/%{name}
-%attr(0640,root,www) %config(noreplace) %{_sysconfdir}/%{name}/gaeld.env
+%attr(0640,root,www) %config(noreplace) %{_sysconfdir}/sysconfig/gaeld
 %dir %attr(0750,www,www) /var/lib/%{name}
 %dir %attr(0750,www,www) /var/lib/%{name}/backups
 %config(noreplace) %{_sysconfdir}/php-fpm-instances.d/gaeld.conf

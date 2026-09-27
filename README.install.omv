@@ -1,5 +1,5 @@
 Gäld is installed under /srv/www/gaeld. The document root is
-/srv/www/gaeld/public. Configuration is /etc/gaeld/gaeld.env
+/srv/www/gaeld/public. Configuration is /etc/sysconfig/gaeld
 (symlinked to /srv/www/gaeld/.env).
 
 1. Create the database (PostgreSQL) and start the private Redis
@@ -10,7 +10,7 @@ Gäld is installed under /srv/www/gaeld. The document root is
    su - postgres -c "createdb -O gaeld gaeld"
    systemctl enable --now postgresql redis@gaeld
 
-2. Edit /etc/gaeld/gaeld.env. Set DB_PASSWORD, APP_URL, and the
+2. Edit /etc/sysconfig/gaeld. Set DB_PASSWORD, APP_URL, and the
    hostname used in WEBAUTHN_ID. APP_URL must be the URL users open
    in the browser, including https:// when TLS is terminated in front.
 
